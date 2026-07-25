@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
 const { User } = require("../models/sequelize");
+const LoginActivity = require("../models/mongo/loginActivity.model");
 
 const generateTokens = (user) => {
     const accessToken = jwt.sign(
@@ -21,22 +22,35 @@ const generateTokens = (user) => {
     return { accessToken, refreshToken };
 };
 
+exports.generateTokens = generateTokens;
+
+exports.sanitizeUser = (user) => ({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+});
+
 exports.signup = async (data) => {
     const existing = await User.findOne({ where: { email: data.email } });
     if (existing) throw new Error("User already exists");
 
     const user = await User.create(data);
-    return { message: "User created successfully", data:user };
+    return { message: "User created successfully", data: exports.sanitizeUser(user) };
 };
 
-exports.login = async ({ email, password }) => {
+exports.login = async ({ email, password }, meta = {}) => {
     const user = await User.findOne({ where: { email } });
     if (!user) throw new Error("Invalid credentials");
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) throw new Error("Invalid credentials");
 
-    return generateTokens(user);
+    LoginActivity.create({ userId: user.id, ip: meta.ip, device: meta.device })
+        .catch((err) => console.error("Failed to record login activity:", err));
+
+    const tokens = generateTokens(user);
+    return { ...tokens, user: exports.sanitizeUser(user) };
 };
 
 exports.refreshToken = async (token) => {

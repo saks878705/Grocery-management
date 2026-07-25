@@ -19,7 +19,10 @@ exports.login = async (req, res) => {
         if(!req.body.email || !req.body.password) {
             return res.status(400).json({ message: "Email and password are required" });
         }
-        const tokens = await authService.login(req.body);
+        const tokens = await authService.login(req.body, {
+            ip: req.ip,
+            device: req.headers["user-agent"],
+        });
         res.json(tokens);
     } catch (err) {
         res.status(400).json({ message: err.message });

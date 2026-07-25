@@ -38,7 +38,7 @@ exports.update = async (req, res) => {
     try {
         const stock = await stockService.updateStock(
             req.params.productId,
-            req.body.quantity
+            req.body
         );
         res.json(stock);
     } catch (err) {

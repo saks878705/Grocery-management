@@ -1,32 +1,28 @@
 const sequelize = require("../config/postgres");
 const {Category, Stock, Product, OrderItem, Order, User} = require("../models/sequelize");
 const Notification = require("../models/mongo/notification.model");
+const { getAdminUsers } = require("../utils/adminUsers.util");
 
 exports.updateOrderStatus = async (orderId, status, adminId) => {
-  // 🔍 Find order
   const order = await Order.findByPk(orderId);
 
   if (!order) {
     throw new Error("Order not found");
   }
 
-  // 🔒 Optional: validate status transitions
   const allowedStatuses = ["PLACED", "PROCESSING", "READY_FOR_DELIVERY", "DELIVERED", "CANCELLED"];
 
   if (!allowedStatuses.includes(status)) {
     throw new Error("Invalid status");
   }
 
-  // Example rule: cannot move backwards
   if (order.status === "DELIVERED" || order.status === "CANCELLED") {
     throw new Error("Cannot update completed/cancelled order");
   }
 
-  //   Update status
   order.status = status;
   await order.save();
 
-  // 🎯 If READY_FOR_DELIVERY → notify customer
   if (status === "READY_FOR_DELIVERY") {
     const user = await User.findByPk(order.userId);
 
@@ -35,7 +31,7 @@ exports.updateOrderStatus = async (orderId, status, adminId) => {
         userId: user.id,
         type: "ORDER_READY",
         userType: "CUSTOMER",
-        message: `Your order (${order.id}) is ready for delivery 🚚`,
+        message: `Your order (${order.id}) is ready for delivery`,
       });
     }
   }
@@ -44,7 +40,7 @@ exports.updateOrderStatus = async (orderId, status, adminId) => {
 };
 
 exports.placeOrder = async (userId, orderData) => {
-  const { items, deliveryDate } = orderData;
+  const { items, scheduledAt } = orderData;
 
   const transaction = await sequelize.transaction();
 
@@ -55,10 +51,9 @@ exports.placeOrder = async (userId, orderData) => {
     for (const item of items) {
       const { productId, quantity } = item;
 
-      // 🔒 Lock stock row
       const stock = await Stock.findOne({
         where: { productId },
-        lock: transaction.LOCK.UPDATE, //means now the row is locked for update
+        lock: transaction.LOCK.UPDATE,
         transaction
       });
 
@@ -66,9 +61,8 @@ exports.placeOrder = async (userId, orderData) => {
         throw new Error(`Product ${productId} is out of stock`);
       }
 
-      // Get product details
       const product = await Product.findByPk(productId, {
-        include: [{ model: Category }],
+        include: [{ model: Category, as: "category" }],
         transaction
       });
 
@@ -76,30 +70,26 @@ exports.placeOrder = async (userId, orderData) => {
         throw new Error(`Product ${productId} not found`);
       }
 
-      // Deduct stock
       stock.quantity -= quantity;
       await stock.save({ transaction });
 
-      // Calculate price
       totalAmount += product.price * quantity;
 
       orderItemsData.push({
         productId,
-        categoryId: product.Category.id,
+        categoryId: product.category.id,
         quantity,
-        price: product.price
+        priceAtPurchase: product.price
       });
     }
 
-    // Create Order
     const order = await Order.create({
       userId,
       totalAmount,
-      deliveryDate,
+      scheduledAt,
       status: "PLACED"
     }, { transaction });
 
-    // Create Order Items
     for (const item of orderItemsData) {
       await OrderItem.create({
         ...item,
@@ -108,6 +98,15 @@ exports.placeOrder = async (userId, orderData) => {
     }
 
     await transaction.commit();
+
+    getAdminUsers()
+      .then((admins) => Notification.insertMany(admins.map((admin) => ({
+        userId: admin.id,
+        type: "ORDER_CREATED",
+        userType: "ADMIN",
+        message: `New order (${order.id}) placed for ${totalAmount}`
+      }))))
+      .catch((err) => console.error("Failed to notify admins of new order:", err));
 
     return order;
 
@@ -125,7 +124,7 @@ exports.getUserOrders = async (userId) => {
       {
         model: OrderItem,
         as: "items",
-        attributes: ["id", "quantity", "price"],
+        attributes: ["id", "quantity", "priceAtPurchase"],
         include: [
           {
             model: Product,
@@ -133,6 +132,7 @@ exports.getUserOrders = async (userId) => {
             include: [
               {
                 model: Category,
+                as: "category",
                 attributes: ["id", "name"]
               }
             ]
@@ -145,12 +145,43 @@ exports.getUserOrders = async (userId) => {
   return orders;
 };
 
+exports.getAllOrders = async () => {
+  const orders = await Order.findAll({
+    order: [["createdAt", "DESC"]],
+    include: [
+      {
+        model: OrderItem,
+        as: "items",
+        attributes: ["id", "quantity", "priceAtPurchase"],
+        include: [
+          {
+            model: Product,
+            attributes: ["id", "name", "price", "image"],
+            include: [
+              {
+                model: Category,
+                as: "category",
+                attributes: ["id", "name"]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        model: User,
+        attributes: ["id", "name", "email"]
+      }
+    ]
+  });
+
+  return orders;
+};
+
 exports.modifyOrderItems = async (orderId, items, adminId) => {
   const transaction = await sequelize.transaction();
 
   try {
     const order = await Order.findByPk(orderId, {
-      include: [{ model: OrderItem, as: "items" }],
       transaction,
       lock: transaction.LOCK.UPDATE
     });
@@ -161,8 +192,9 @@ exports.modifyOrderItems = async (orderId, items, adminId) => {
       throw new Error("Cannot modify completed order");
     }
 
-    // 🔄 Restore old stock first
-    for (const item of order.items) {
+    const existingItems = await OrderItem.findAll({ where: { orderId }, transaction });
+
+    for (const item of existingItems) {
       const stock = await Stock.findOne({
         where: { productId: item.productId },
         transaction,
@@ -173,13 +205,11 @@ exports.modifyOrderItems = async (orderId, items, adminId) => {
       await stock.save({ transaction });
     }
 
-    // ❌ Remove old items
     await OrderItem.destroy({
       where: { orderId },
       transaction
     });
 
-    // ➕ Add new items
     let totalAmount = 0;
 
     for (const item of items) {
@@ -196,7 +226,7 @@ exports.modifyOrderItems = async (orderId, items, adminId) => {
       }
 
       const product = await Product.findByPk(productId, {
-        include: [Category],
+        include: [{ model: Category, as: "category" }],
         transaction
       });
 
@@ -208,19 +238,17 @@ exports.modifyOrderItems = async (orderId, items, adminId) => {
       await OrderItem.create({
         orderId,
         productId,
-        categoryId: product.Category.id,
+        categoryId: product.category.id,
         quantity,
-        price: product.price
+        priceAtPurchase: product.price
       }, { transaction });
     }
 
-    // 🔄 Update total
     order.totalAmount = totalAmount;
     await order.save({ transaction });
 
     await transaction.commit();
 
-    // 🔔 Notify user
     await Notification.create({
       userId: order.userId,
       type: "ORDER_UPDATED",
@@ -245,7 +273,7 @@ exports.rescheduleOrder = async (orderId, newDate, adminId) => {
     throw new Error("Cannot reschedule completed order");
   }
 
-  order.deliveryDate = newDate;
+  order.scheduledAt = newDate;
   await order.save();
 
   await Notification.create({
@@ -263,15 +291,13 @@ exports.cancelOrder = async (orderId, user) => {
 
   try {
     const order = await Order.findByPk(orderId, {
-      include: [{ model: OrderItem, as: "items" }],
       transaction,
       lock: transaction.LOCK.UPDATE
     });
 
     if (!order) throw new Error("Order not found");
 
-    // 🔐 Permission check
-    if (user.role !== "admin" && order.userId !== user.id) {
+    if (user.role !== "ADMIN" && order.userId !== user.id) {
       throw new Error("Unauthorized");
     }
 
@@ -279,8 +305,9 @@ exports.cancelOrder = async (orderId, user) => {
       throw new Error("Order already cancelled");
     }
 
-    // 🔄 Restore stock
-    for (const item of order.items) {
+    const existingItems = await OrderItem.findAll({ where: { orderId }, transaction });
+
+    for (const item of existingItems) {
       const stock = await Stock.findOne({
         where: { productId: item.productId },
         transaction,
@@ -291,13 +318,11 @@ exports.cancelOrder = async (orderId, user) => {
       await stock.save({ transaction });
     }
 
-    // ❌ Update status
     order.status = "CANCELLED";
     await order.save({ transaction });
 
     await transaction.commit();
 
-    // 🔔 Notify user
     await Notification.create({
       userId: order.userId,
       type: "ORDER_UPDATED",

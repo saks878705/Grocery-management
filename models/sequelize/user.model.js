@@ -10,6 +10,8 @@ const User = sequelize.define("User", {
     role: { type: DataTypes.ENUM("ADMIN", "CUSTOMER"), defaultValue: "CUSTOMER" },
     refreshToken: { type: DataTypes.STRING },
     accessToken: { type: DataTypes.STRING },
+    resetToken: { type: DataTypes.STRING, allowNull: true },
+    resetTokenExpiry: { type: DataTypes.DATE, allowNull: true },
 }, {
     timestamps: true,
     hooks: {

@@ -1,28 +1,29 @@
 const Stock = require("../models/sequelize/stock.model");
 const Product = require("../models/sequelize/product.model");
 const Category = require("../models/sequelize/category.model");
-const User = require("../models/sequelize/user.model");
 const { sendMail } = require("../utils/mailer");
-const Notification = require("../models/mongo/notification.model"); // 👈 adjust path
+const { getAdminUsers } = require("../utils/adminUsers.util");
+const Notification = require("../models/mongo/notification.model");
 
 const { Op, col } = require("sequelize");
 
 exports.checkLowStockAndNotify = async () => {
   try {
-    // 🔍 Find low stock products
     const lowStockItems = await Stock.findAll({
       where: {
         quantity: {
-          [Op.lt]: col("threshold"),
+          [Op.lt]: col("lowStockThreshold"),
         },
       },
       include: [
         {
           model: Product,
+          as: "product",
           attributes: ["id", "name"],
           include: [
             {
               model: Category,
+              as: "category",
               attributes: ["name"],
             },
           ],
@@ -31,48 +32,41 @@ exports.checkLowStockAndNotify = async () => {
     });
 
     if (!lowStockItems.length) {
-      console.log("  No low stock items");
+      console.log("No low stock items");
       return;
     }
 
-    // 📧 Get all admins
-    const admins = await User.findAll({
-      where: { role: "admin" },
-      attributes: ["id", "email"],
-    });
-
+    const admins = await getAdminUsers();
     const adminEmails = admins.map((a) => a.email);
-
-    // 🧾 Prepare message content
-    const productListText = lowStockItems.map((item) => {
-      return `${item.Product.name} (${item.Product.Category.name}) → Remaining: ${item.quantity}, Threshold: ${item.threshold}`;
-    });
 
     const productListHTML = lowStockItems.map((item) => {
       return `
         <li>
-          <b>${item.Product.name}</b> (${item.Product.Category.name}) 
-          → Remaining: ${item.quantity}, Threshold: ${item.threshold}
+          <b>${item.product.name}</b> (${item.product.category.name})
+          - Remaining: ${item.quantity}, Threshold: ${item.lowStockThreshold}
         </li>
       `;
     }).join("");
 
     const html = `
-      <h2>⚠️ Low Stock Alert</h2>
+      <h2>Low Stock Alert</h2>
       <p>The following products are running low:</p>
       <ul>${productListHTML}</ul>
     `;
 
-    // 📤 Send email
-    await sendMail({
-      to: adminEmails.join(","),
-      subject: "Low Stock Alert",
-      html,
-    });
+    if (adminEmails.length) {
+      try {
+        await sendMail({
+          to: adminEmails.join(","),
+          subject: "Low Stock Alert",
+          html,
+        });
+        console.log("Email sent to admins");
+      } catch (mailError) {
+        console.error("Failed to send low stock email:", mailError.message);
+      }
+    }
 
-    console.log("📧 Email sent to admins");
-
-    // 🗄️ CREATE NOTIFICATIONS IN MONGODB
     const notifications = [];
 
     for (const admin of admins) {
@@ -81,17 +75,17 @@ exports.checkLowStockAndNotify = async () => {
           userId: admin.id,
           type: "LOW_STOCK",
           userType: "ADMIN",
-          message: `Low stock: ${item.Product.name} (${item.Product.Category.name}) - Remaining ${item.quantity}`,
+          message: `Low stock: ${item.product.name} (${item.product.category.name}) - Remaining ${item.quantity}`,
         });
       }
     }
 
-    // 🔥 Bulk insert (optimized)
-    await Notification.insertMany(notifications);
-
-    console.log("🔔 Notifications stored in MongoDB");
+    if (notifications.length) {
+      await Notification.insertMany(notifications);
+      console.log("Notifications stored in MongoDB");
+    }
 
   } catch (error) {
-    console.error("❌ Error in low stock job:", error.message);
+    console.error("Error in low stock job:", error.message);
   }
 };

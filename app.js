@@ -9,6 +9,9 @@ const authRoutes = require("./routes/v1/auth.routes");
 const productRoutes = require("./routes/v1/product.routes");
 const stockRoutes = require("./routes/v1/stock.routes");
 const orderRoutes = require("./routes/v1/order.routes");
+const issueRoutes = require("./routes/v1/issue.routes");
+const notificationRoutes = require("./routes/v1/notification.routes");
+const analyticsRoutes = require("./routes/v1/analytics.routes");
 
 const app = express();
 
@@ -36,12 +39,16 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/products", productRoutes);
 app.use("/api/v1/stocks", stockRoutes);
 app.use("/api/v1/orders", orderRoutes);
+app.use("/api/v1/issues", issueRoutes);
+app.use("/api/v1/notifications", notificationRoutes);
+app.use("/api/v1/analytics", analyticsRoutes);
 
 
 // Global Error Handler
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({
+  res.status(err.statusCode || 500).json({
+    success: false,
     message: err.message || "Internal Server Error",
   });
 });

@@ -22,9 +22,9 @@ exports.placeOrder = async (req, res) => {
 
 exports.getUserOrders = async (req, res) => {
   try {
-    const userId = req.user.id;
-
-    const orders = await orderService.getUserOrders(userId);
+    const orders = req.user.role === "ADMIN"
+      ? await orderService.getAllOrders()
+      : await orderService.getUserOrders(req.user.id);
 
     res.status(200).json({
       success: true,
@@ -45,15 +45,7 @@ exports.updateOrderStatus = async (req, res) => {
     const { orderId } = req.params;
     const { status } = req.body;
 
-    const adminId = req.user.id; // from auth middleware
-
-    // 🛑 Only admin allowed
-    if (req.user.role !== "admin") {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied. Admin only.",
-      });
-    }
+    const adminId = req.user.id;
 
     const order = await orderService.updateOrderStatus(orderId, status, adminId);
 
@@ -73,8 +65,6 @@ exports.updateOrderStatus = async (req, res) => {
 
 exports.modifyOrderItems = async (req, res) => {
   try {
-    if (req.user.role !== "admin") throw new Error("Admin only");
-
     const order = await orderService.modifyOrderItems(
       req.params.orderId,
       req.body.items,
@@ -89,11 +79,9 @@ exports.modifyOrderItems = async (req, res) => {
 
 exports.rescheduleOrder = async (req, res) => {
   try {
-    if (req.user.role !== "admin") throw new Error("Admin only");
-
     const order = await orderService.rescheduleOrder(
       req.params.orderId,
-      req.body.deliveryDate,
+      req.body.scheduledAt,
       req.user.id
     );
 

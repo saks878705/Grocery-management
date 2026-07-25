@@ -1,10 +1,9 @@
 const { Stock, Product } = require("../models/sequelize");
 
-//   CREATE STOCK
 exports.createStock = async (data) => {
-    console.log("Creating stock with data:", data);
     const product = await Product.findOne({ where: { id: data.productId } });
     if (!product) throw new Error("Product not found");
+
     const existing = await Stock.findOne({
         where: { productId: data.productId }
     });
@@ -16,20 +15,18 @@ exports.createStock = async (data) => {
     return await Stock.create(data);
 };
 
-//   GET ALL STOCKS
 exports.getAllStocks = async () => {
     return await Stock.findAll({
         include: [
             {
                 model: Product,
-                // as: "product",
+                as: "product",
                 attributes: ["id", "name", "price"]
             }
         ]
     });
 };
 
-//   GET STOCK BY PRODUCT ID
 exports.getStockByProduct = async (productId) => {
     const stock = await Stock.findOne({
         where: { productId },
@@ -46,18 +43,29 @@ exports.getStockByProduct = async (productId) => {
     return stock;
 };
 
-//   UPDATE STOCK
-exports.updateStock = async (productId, quantity) => {
+exports.updateStock = async (productId, { quantity, lowStockThreshold }) => {
     const stock = await Stock.findOne({ where: { productId } });
     if (!stock) throw new Error("Stock not found");
 
-    stock.quantity = quantity;
+    if (quantity !== undefined) {
+        if (!Number.isInteger(quantity) || quantity < 0) {
+            throw new Error("Quantity must be a non-negative integer");
+        }
+        stock.quantity = quantity;
+    }
+
+    if (lowStockThreshold !== undefined) {
+        if (!Number.isInteger(lowStockThreshold) || lowStockThreshold < 0) {
+            throw new Error("Low stock threshold must be a non-negative integer");
+        }
+        stock.lowStockThreshold = lowStockThreshold;
+    }
+
     await stock.save();
 
     return stock;
 };
 
-//   DELETE STOCK
 exports.deleteStock = async (productId) => {
     const stock = await Stock.findOne({ where: { productId } });
     if (!stock) throw new Error("Stock not found");
