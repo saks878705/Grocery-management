@@ -41,24 +41,6 @@ and keeps that traffic off the primary transactional database.
 - Analytics endpoints: product consumption trends and login-activity trends over time
 - Request validation (express-validator) and rate limiting on auth endpoints
 
-## Local database setup (macOS, Homebrew)
-
-If you don't already have Postgres/MongoDB running locally:
-
-```bash
-brew install postgresql@16
-brew tap mongodb/brew
-brew install mongodb-community@7.0
-
-brew services start postgresql@16
-brew services start mongodb-community@7.0
-
-# create the postgres role + database used by .env.example
-/opt/homebrew/opt/postgresql@16/bin/psql -U "$(whoami)" -d postgres -c \
-  "CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'change_me';"
-/opt/homebrew/opt/postgresql@16/bin/psql -U "$(whoami)" -d postgres -c \
-  "CREATE DATABASE grocery_db OWNER postgres;"
-```
 
 MongoDB needs no manual database/user setup — `mongoose.connect()` creates the database on
 first write. Any other Postgres/MongoDB install (Docker, a hosted instance, etc.) works too;
